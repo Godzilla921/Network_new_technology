@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 
 class RecommenderSystem:
-    def __init__(self, file_path, users, movies, ratings, encoding_="ISO-8859-1"):
+    def __init__(self, file_path, users, movies, ratings, sim_file, encoding_="ISO-8859-1"):
         # 初始化三个私有字段，表示三个文件的相对路径，用以读取文件中的内容
         self.__users_path = os.path.join(file_path, users)
         self.__movies_path = os.path.join(file_path, movies)
@@ -25,7 +25,7 @@ class RecommenderSystem:
         # 这是一个稀疏矩阵
         self.user_movie_matrix = self.__load_score_matrix()
         # 定义用户相似度矩阵
-        self.user_cross_sim = self.__load_sim_matrix(os.path.join("./data", "pearson_sim.json"))
+        self.user_cross_sim = self.__load_sim_matrix(os.path.join("./data", sim_file))
 
     # 加载用户，电影，评价的方法 格式[{userId,movieId,score},~~~]
     def __load_data(self, encoding_):
@@ -96,11 +96,11 @@ class RecommenderSystem:
                     else:
                         # 使用余弦相似度
                         # 计算用户i与用户j的余弦相似度
-                        # sim_matrix[i, j] = self.sim_cosine(self.user_movie_matrix[i, :],
-                        #                                    self.user_movie_matrix[j, :])
-                        # 使用皮尔逊相关系数
-                        sim_matrix[i, j] = self.sim_person(self.user_movie_matrix[i, :],
+                        sim_matrix[i, j] = self.sim_cosine(self.user_movie_matrix[i, :],
                                                            self.user_movie_matrix[j, :])
+                        # 使用皮尔逊相关系数
+                        # sim_matrix[i, j] = self.sim_person(self.user_movie_matrix[i, :],
+                        #                                    self.user_movie_matrix[j, :])
                     # 对user_cross_sim矩阵进行填充，得到对称矩阵
                     sim_matrix[j, i] = sim_matrix[i, j]
             json.dump(sim_matrix.tolist(), open(path, 'w'))
@@ -108,15 +108,22 @@ class RecommenderSystem:
 
     # 根据用户相似度，预测此用户对此电影的打分
     def predicting_score(self, user_id, movie_id):
-        sum_w = 0.0         # sum_w 为所有其他看过这部电影的用户与该用户的相似度之和
-        sum_w_rating = 0.0  # sum_w_rating 为依据与每个用户的相似度计算出的分数之和
-        for i in range(6040):
-            # 用户i 看过电影 movie_id
-            if self.user_movie_matrix[i, movie_id] != 0:
-                # swm_w 为用户相似度之和
-                sum_w += self.user_cross_sim[user_id, i]
-                #
-                sum_w_rating += self.user_cross_sim[user_id, i] * self.user_movie_matrix[i, movie_id]
+        # index 为对该电影评分不为0 的用户下标 index 为一维的列表
+        index = np.nonzero(self.user_movie_matrix[:, movie_id])
+        # sum_w 为所有其他看过这部电影的用户与该用户的相似度之和
+        sum_w = np.sum(self.user_cross_sim[user_id, index])
+        # sum_w_rating 为依据与每个用户的相似度计算出的分数之和
+        sum_w_rating = np.sum(self.user_cross_sim[user_id, index]*self.user_movie_matrix[index, movie_id])
+        # 利用循环遍历的方法效率太低
+        # sum_w = 0.0
+        # sum_w_rating = 0.0
+        # for i in range(6040):
+        #     # 用户i 看过电影 movie_id
+        #     if self.user_movie_matrix[i, movie_id] != 0:
+        #         # swm_w 为用户相似度之和
+        #         sum_w += self.user_cross_sim[user_id, i]
+        #         #
+        #         sum_w_rating += self.user_cross_sim[user_id, i] * self.user_movie_matrix[i, movie_id]
         if sum_w == 0.0:
             return 0.0
         else:
@@ -160,5 +167,5 @@ class RecommenderSystem:
             (np.sum((x - ave_x) * (x - ave_x)) * np.sum((y - ave_y) * (y - ave_y))))
 
 
-my_recommender_system = RecommenderSystem("./ml-1m", "users.dat", "movies.dat", "ratings.dat")
+my_recommender_system = RecommenderSystem("./ml-1m", "users.dat", "movies.dat", "ratings.dat", "cos_sim.json")
 print("预测准确度为:{}".format(my_recommender_system.precision()))
