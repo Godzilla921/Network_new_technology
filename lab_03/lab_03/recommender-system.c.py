@@ -1,6 +1,8 @@
 import json
 import os
 import random
+import time
+
 import numpy as np
 
 from tqdm import tqdm
@@ -86,21 +88,38 @@ class RecommenderSystem:
             print("开始计算用户之间的相似度 ...")
             sim_matrix = np.zeros((int(self.users_data[-1][0]),
                                    int(self.users_data[-1][0])))
+
+            # ------------用于优化后的person相关系数矩阵计算的局部列表---
+            # difference_matrix 二维列表存储每位用户对每部电影的打分-平均打分
+            difference_matrix = self.__load_score_matrix()
+            # average_score 一维列表存储每位用户的平均打分
+            average_score = np.average(self.user_movie_matrix, axis=1)
+            # 得到差值矩阵，即 x-ave_x
+            for i in range(len(average_score)):
+                difference_matrix[i] -= average_score[i]
+            # sum_square 以为列表存储每位用户对所有电影（打分-平均打分）的平方和
+            sum_square = np.sum(np.square(difference_matrix), axis=1)
+            # 同一位用户的相似度为1
+            for i in range(self.user_movie_matrix.shape[0]):
+                sim_matrix[i, i] = 1
             # 对用用户评价矩阵的坐标轴0(0-6039)
             for i in tqdm(range(self.user_movie_matrix.shape[0])):
                 # 对用用户评价矩阵的坐标轴0(0-6039)
-                for j in range(i, self.user_movie_matrix.shape[0]):
-                    # 若是同一位用户，相似度为1
-                    if i == j:
-                        sim_matrix[i, j] = 1
-                    else:
-                        # 使用余弦相似度
-                        # 计算用户i与用户j的余弦相似度
-                        sim_matrix[i, j] = self.sim_cosine(self.user_movie_matrix[i, :],
-                                                           self.user_movie_matrix[j, :])
-                        # 使用皮尔逊相关系数
-                        # sim_matrix[i, j] = self.sim_person(self.user_movie_matrix[i, :],
-                        #                                    self.user_movie_matrix[j, :])
+                for j in range(i+1, self.user_movie_matrix.shape[0]):
+                    # -----使用余弦相似度
+                    # 计算用户i与用户j的余弦相似度
+                    # sim_matrix[i, j] = self.sim_cosine(self.user_movie_matrix[i, :],
+                    #                                    self.user_movie_matrix[j, :])
+
+                    # -----使用皮尔逊相关系数
+                    # 直接使用sim_person 函数会有大量的重复计算，性能较差
+                    # sim_matrix[i, j] = self.sim_person(self.user_movie_matrix[i, :],
+                    #                                    self.user_movie_matrix[j, :])
+
+                    # ---------------- 优化后的person相关系数计算----------------------
+                    # 一些重复的计算依据已预先计算并存储，在这里可以直接调用
+                    sim_matrix[i, j] = np.sum(difference_matrix[i, :] * difference_matrix[j, :]) \
+                                       / np.sqrt(sum_square[i] * sum_square[j])
                     # 对user_cross_sim矩阵进行填充，得到对称矩阵
                     sim_matrix[j, i] = sim_matrix[i, j]
             json.dump(sim_matrix.tolist(), open(path, 'w'))
@@ -108,22 +127,14 @@ class RecommenderSystem:
 
     # 根据用户相似度，预测此用户对此电影的打分
     def predicting_score(self, user_id, movie_id):
-        # index 为对该电影评分不为0 的用户下标 index 为一维的列表
+        # 利用 numpy 进行计算提高程序性能
+        # index 为对该电影评分不为0 的用户
         index = np.nonzero(self.user_movie_matrix[:, movie_id])
         # sum_w 为所有其他看过这部电影的用户与该用户的相似度之和
         sum_w = np.sum(self.user_cross_sim[user_id, index])
         # sum_w_rating 为依据与每个用户的相似度计算出的分数之和
-        sum_w_rating = np.sum(self.user_cross_sim[user_id, index]*self.user_movie_matrix[index, movie_id])
-        # 利用循环遍历的方法效率太低
-        # sum_w = 0.0
-        # sum_w_rating = 0.0
-        # for i in range(6040):
-        #     # 用户i 看过电影 movie_id
-        #     if self.user_movie_matrix[i, movie_id] != 0:
-        #         # swm_w 为用户相似度之和
-        #         sum_w += self.user_cross_sim[user_id, i]
-        #         #
-        #         sum_w_rating += self.user_cross_sim[user_id, i] * self.user_movie_matrix[i, movie_id]
+        sum_w_rating = np.sum(self.user_cross_sim[user_id, index] * self.user_movie_matrix[index, movie_id])
+        # 由于缺失几部电影，所有用户都未看过缺失的电影，故直接预测该用户不会看该电影
         if sum_w == 0.0:
             return 0.0
         else:
@@ -131,15 +142,17 @@ class RecommenderSystem:
 
     def precision(self):
         print("正在计算准确率 ...")
+        time.sleep(0.1)
         # 对于每一个训练样本
         # score 为实际分数，score_predicting为预测分数
         # predicting_success统计预测成功的数目
         predicting_success = 0
         for user_id, movie_id, score in tqdm(self.test_data):
-            # 得到预测分数，平按照四舍五入进行取整
+            # 得到预测分数
             score_predicting = self.predicting_score(int(user_id) - 1, int(movie_id) - 1)
+            # 按照四舍五入进行取整
             score_predicting = int(score_predicting + 0.5)
-            if score == score_predicting:
+            if int(score) == int(score_predicting):
                 predicting_success += 1
         # 准确度等于 成功预测的数目/总体测试数据数目
         return float(predicting_success) / len(self.test_data)
@@ -167,5 +180,6 @@ class RecommenderSystem:
             (np.sum((x - ave_x) * (x - ave_x)) * np.sum((y - ave_y) * (y - ave_y))))
 
 
-my_recommender_system = RecommenderSystem("./ml-1m", "users.dat", "movies.dat", "ratings.dat", "cos_sim.json")
+my_recommender_system = RecommenderSystem("./ml-1m", "users.dat", "movies.dat", "ratings.dat",
+                                          "pearson_sim_version_2.json")
 print("预测准确度为:{}".format(my_recommender_system.precision()))
